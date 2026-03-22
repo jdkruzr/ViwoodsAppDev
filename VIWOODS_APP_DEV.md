@@ -106,14 +106,20 @@ ENoteSetting.getInstance().onWritingEnd();             // triggers quality redra
 ENoteSetting.getInstance().exitWriting();              // native_exit()
 ```
 
-**Status:** Calling `initWriting()` from a third-party app causes a native crash
-(SIGSEGV). The library is in `public.libraries.txt` so loading should be permitted,
-but `native_init()` may expect system_server context. Needs further investigation.
+**Status: NOT VIABLE from app process.** `libpaintworker.so` crashes immediately
+on load (`JNI_OnLoad`). The library requires:
+- `/dev/t1000_spi` — direct SPI access to the e-ink timing controller (SELinux blocked)
+- `SurfaceComposerClient` — system-level display compositor access
+- libusb access to `/dev/bus/usb` and `/dev/input` — pen digitizer hardware
+- `WritingSurface` creation via `IGraphicBufferProducer`
 
-**If it worked, it would enable:**
-- Custom bitmap rendering through the fast path
-- Redrawing saved strokes via the MIPI fast path
-- Full control over the overlay lifecycle
+These are all restricted to system_server. The library is in `public.libraries.txt`
+(so dlopen succeeds) but initialization crashes due to insufficient privileges.
+
+**Conclusion:** Third-party apps must use Path 1 (AutoDraw via binder) for fast
+pen rendering. Path 2 is only available to system_server processes. For saved
+content redraw, use the normal Android canvas — there's no latency requirement
+for static content.
 
 ## Display Modes (ENoteMode)
 
@@ -297,9 +303,9 @@ it requires matching hardcoded UI patterns.
 ## What's Left to Explore
 
 ### High Priority
-- [ ] **Get libpaintworker.so loading in app process** — try `System.load()` then
-  individual native method calls. The lib loads (it's in public.libraries.txt) but
-  `native_init()` may crash. Need to isolate which native call fails.
+- [x] ~~**Get libpaintworker.so loading in app process**~~ — **NOT VIABLE.** Library
+  requires `/dev/t1000_spi`, `SurfaceComposerClient`, and libusb — all system-only.
+  Crashes in `JNI_OnLoad`. Third-party apps must use the binder AutoDraw path.
 - [ ] **Pen width calibration** — map T1000 AutoDraw pen width values to actual
   pixel widths to match fast-pass and final-render stroke appearance
 - [ ] **Pressure curve mapping** — determine how T1000 maps pen pressure to stroke
@@ -317,9 +323,8 @@ it requires matching hardcoded UI patterns.
   `setPictureMode` while a stroke is in progress?
 
 ### Lower Priority
-- [ ] **Bitmap rendering via JNI** — if libpaintworker loads, test
-  `native_set_javaBitmap` + `native_show_javaBitmapRect` for rendering saved
-  strokes through the fast path
+- [x] ~~**Bitmap rendering via JNI**~~ — **NOT VIABLE.** Same as libpaintworker
+  limitation above. Saved strokes should use normal Android canvas rendering.
 - [ ] **App suggestion mode** — test `setAppSuggestionMode(pkg, mode)` and
   `setAppModeAbility(pkg, ability)` for per-app display settings
 - [ ] **Gamma/contrast tuning** — `setGammaIndex`, `setAppLightShadeEliminateLevel`

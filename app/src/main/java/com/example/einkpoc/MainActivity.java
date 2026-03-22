@@ -60,6 +60,7 @@ public class MainActivity extends Activity {
         addButton(row1, "Info", v -> refreshInfo());
         addButton(row1, "Fast Ink ON", v -> enableFastInk());
         addButton(row1, "Fast Ink OFF", v -> disableFastInk());
+        addButton(row1, "Probe Native", v -> probeNative());
         addButton(row1, "Clear", v -> drawView.clear());
 
         // Row 2: display modes
@@ -112,6 +113,16 @@ public class MainActivity extends Activity {
                 0, LinearLayout.LayoutParams.WRAP_CONTENT, 1.0f);
         lp.setMargins(2, 0, 2, 0);
         parent.addView(btn, lp);
+    }
+
+    private void probeNative() {
+        statusText.setText("Running native probe... (may crash if lib fails to init)");
+        // Run in a thread so if it hangs we don't ANR
+        new Thread(() -> {
+            NativeProbe probe = new NativeProbe();
+            String result = probe.run();
+            runOnUiThread(() -> statusText.setText(result));
+        }).start();
     }
 
     private void refreshInfo() {
