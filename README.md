@@ -2,7 +2,7 @@
 
 Android proof-of-concept for achieving fast, low-latency pen input on the **Viwoods AiPaper Mini** e-ink tablet from a third-party (non-system-signed) app.
 
-The app uses Java reflection and Binder IPC to access Viwoods' proprietary e-ink APIs, enabling the T1000 timing controller to render pen strokes directly to the display — bypassing the normal Android rendering pipeline for near-instant ink feedback.
+The app uses Java reflection and Binder IPC to access Viwoods' e-ink APIs, enabling the T1000 timing controller to render pen strokes directly to the display — bypassing the normal Android rendering pipeline for near-instant ink feedback.
 
 ## How It Works
 
