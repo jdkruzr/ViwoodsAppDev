@@ -85,10 +85,23 @@ call, AutoDraw is enabled but draws nowhere.
 - After pen-up, system waits 800ms then calls `clearAllView()` (overlay disappears)
 - App should render final strokes after ~900ms delay to avoid visual conflict
 
+**Critical finding:** The binder AutoDraw calls succeed at the Java `AutoDrawPolicy`
+layer but `updateAutoDrawRegion()` in system_server has a bug: it calls
+`ENoteWriting.getInstance().clearAutoDrawRects()` (clearing native rects) then
+rebuilds a Java-side `Region`, but NEVER calls `setAutoDrawRects()` to push the
+new rects to `libpaintworker.so`. The native layer only gets cleared, never updated.
+This means the AutoDraw binder path alone cannot produce fast ink — the native rects
+must be set via the JNI path (`initWriting()` + `WriteHelp`).
+
+Previous "working" fast ink in the bottom half of the screen was stale native state
+from a previous WiNote/Wschedule session that persisted across app restarts
+(but not across device wipes).
+
 **Limitations:**
 - Fast strokes use T1000's own rendering (not customizable beyond width range)
 - No control over pressure curve in the fast pass
 - Strokes are ephemeral — not saved by the system
+- Binder-only path cannot set native draw rects (framework bug in updateAutoDrawRegion)
 
 ### Path 2: ENoteWriting JNI (NOT YET WORKING from app process)
 
@@ -116,10 +129,16 @@ on load (`JNI_OnLoad`). The library requires:
 These are all restricted to system_server. The library is in `public.libraries.txt`
 (so dlopen succeeds) but initialization crashes due to insufficient privileges.
 
-**Conclusion:** Third-party apps must use Path 1 (AutoDraw via binder) for fast
-pen rendering. Path 2 is only available to system_server processes. For saved
-content redraw, use the normal Android canvas — there's no latency requirement
-for static content.
+**Conclusion:** `initWriting()` requires system/platform app SELinux context.
+Product apps (e.g., Wschedule in `/product/app/`) CAN call it from their own
+process. Sideloaded apps run as `untrusted_app_27` and crash in `JNI_OnLoad`.
+
+Root access will enable:
+- Running with permissive SELinux to test if it's just policy
+- Installing app as product/system app
+- Full logcat for native crash analysis
+- Building a privileged helper service
+- Potentially discovering a non-root path
 
 ## Display Modes (ENoteMode)
 
