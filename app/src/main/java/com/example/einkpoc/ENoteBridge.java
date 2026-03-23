@@ -12,6 +12,7 @@ import java.lang.reflect.Method;
 public class ENoteBridge {
     private static final String TAG = "ENoteBridge";
     private Object enote; // ENoteSetting.getInstance()
+    private android.content.Context appContext;
 
     public static final int MODE_NULL = -1;
     public static final int MODE_AUTO = 0;
@@ -23,7 +24,8 @@ public class ENoteBridge {
 
     private Object binderService; // IENoteSetting extracted from wrapper's mService field
 
-    public boolean init() {
+    public boolean init(android.content.Context context) {
+        this.appContext = context.getApplicationContext();
         StringBuilder initLog = new StringBuilder();
         initLog.append("=== ENoteBridge.init() ===\n");
         initLog.append("Time: ").append(new java.util.Date()).append("\n\n");
@@ -110,19 +112,14 @@ public class ENoteBridge {
     // === Writing system ===
 
     public String initWriting() {
-        // First try loading the native lib directly in our process
+        // Wschedule/WiNote call this from their app process via NoteView constructor.
+        // Do NOT call System.loadLibrary first — the framework handles it internally.
+        // Call setApplicationContext first, like NoteView does.
         try {
-            System.loadLibrary("paintworker");
-            writeFile("einkpoc_libload.txt", "loadLibrary(paintworker) succeeded!\n");
-        } catch (Throwable e1) {
-            try {
-                System.load("/system/lib64/libpaintworker.so");
-                writeFile("einkpoc_libload.txt", "System.load(/system/lib64/libpaintworker.so) succeeded!\n");
-            } catch (Throwable e2) {
-                String msg = "loadLibrary FAIL: " + e1.getMessage() + "\nSystem.load FAIL: " + e2.getMessage() + "\n";
-                writeFile("einkpoc_libload.txt", msg);
-                writeCrash("loadLib", e2);
-            }
+            Method setCtx = enote.getClass().getMethod("setApplicationContext", android.content.Context.class);
+            setCtx.invoke(enote, appContext);
+        } catch (Throwable e) {
+            writeCrash("setApplicationContext", e);
         }
         return safeCallDescriptive("initWriting");
     }
@@ -185,8 +182,10 @@ public class ENoteBridge {
 
     // === AutoDraw (system overlay path) ===
 
-    // These methods live on the binder service (IENoteSetting), not the wrapper
+    // Try direct transact first (correct PID), fall back to shell
     public String setAutoDrawEnabled(boolean enable) {
+        String r = directTransact(20, enable ? 1 : 0);
+        if (r != null) return r;
         return binderCall1("setT1000AutoDrawEnable", boolean.class, enable);
     }
 
@@ -216,10 +215,15 @@ public class ENoteBridge {
     }
 
     public String addAutoDrawRect(Rect rect) {
+        // MUST call from our app process so the rect is registered to our PID
+        String r = directTransactRect(24, rect);
+        if (r != null) return r;
         return binderCall1("addAutoDrawRect", Rect.class, rect);
     }
 
     public String setAllRegionUnAutoDraw(boolean enable) {
+        String r = directTransact(28, enable ? 1 : 0);
+        if (r != null) return r;
         return binderCall1("setAllRegionUnAutoDraw", boolean.class, enable);
     }
 
@@ -233,6 +237,94 @@ public class ENoteBridge {
         String r = safeCallVoid("stopHandwriteInterceptMipi");
         if (r.startsWith("FAIL")) return binderCallVoid("stopHandwriteInterceptMipi");
         return r;
+    }
+
+    /**
+     * Direct IBinder.transact() from our process — ensures correct calling PID.
+     * Returns result string on success, null on failure.
+     */
+    private String directTransact(int txnCode, int intArg) {
+        try {
+            // Get the raw IBinder for ENoteSetting service
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            android.os.IBinder binder = (android.os.IBinder) getService.invoke(null, "ENoteSetting");
+            if (binder == null) return null;
+
+            android.os.Parcel data = android.os.Parcel.obtain();
+            android.os.Parcel reply = android.os.Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.os.enote.IENoteSetting");
+                data.writeInt(intArg);
+                binder.transact(txnCode, data, reply, 0);
+                reply.readException();
+                return "OK (direct transact, PID=" + android.os.Process.myPid() + ")";
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        } catch (Throwable e) {
+            writeCrash("directTransact-" + txnCode, e);
+            return null;
+        }
+    }
+
+    private String directTransactRect(int txnCode, Rect rect) {
+        try {
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            android.os.IBinder binder = (android.os.IBinder) getService.invoke(null, "ENoteSetting");
+            if (binder == null) return null;
+
+            android.os.Parcel data = android.os.Parcel.obtain();
+            android.os.Parcel reply = android.os.Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.os.enote.IENoteSetting");
+                // writeTypedObject for Rect: non-null marker then Parcelable data
+                data.writeInt(1); // non-null
+                rect.writeToParcel(data, 0);
+                binder.transact(txnCode, data, reply, 0);
+                reply.readException();
+                return "OK (direct transact rect, PID=" + android.os.Process.myPid() + ")";
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        } catch (Throwable e) {
+            writeCrash("directTransactRect-" + txnCode, e);
+            return null;
+        }
+    }
+
+    /**
+     * Call T1000 command with int array via direct binder transact.
+     * Transaction 7 = callT1000CmdIIsI(int type, int[] values)
+     */
+    public String callT1000Cmd(int type, int[] values) {
+        try {
+            Class<?> smClass = Class.forName("android.os.ServiceManager");
+            Method getService = smClass.getMethod("getService", String.class);
+            android.os.IBinder binder = (android.os.IBinder) getService.invoke(null, "ENoteSetting");
+            if (binder == null) return "FAIL:no binder";
+
+            android.os.Parcel data = android.os.Parcel.obtain();
+            android.os.Parcel reply = android.os.Parcel.obtain();
+            try {
+                data.writeInterfaceToken("android.os.enote.IENoteSetting");
+                data.writeInt(type);
+                data.writeIntArray(values);
+                binder.transact(7, data, reply, 0);
+                reply.readException();
+                int result = reply.readInt();
+                return "OK (result=" + result + ")";
+            } finally {
+                data.recycle();
+                reply.recycle();
+            }
+        } catch (Throwable e) {
+            writeCrash("callT1000Cmd-" + type, e);
+            return errStr(e);
+        }
     }
 
     // Binder service call helpers - try reflection first, fall back to shell `service call`

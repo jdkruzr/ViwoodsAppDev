@@ -1,6 +1,7 @@
 package com.example.einkpoc;
 
 import android.app.Activity;
+import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
 import android.graphics.Paint;
@@ -46,7 +47,22 @@ public class MainActivity extends Activity {
             else System.exit(1);
         });
 
+        // Pre-set MobileSheets write type so FocusMonitor activates WriteHelp on focus
+        try {
+            android.provider.Settings.Global.putInt(getContentResolver(), "mobilesheets_write_type", 1);
+            android.provider.Settings.Global.putString(getContentResolver(), "mobilesheets_last_stop_package", "com.zubersoft.mobilesheetspro");
+        } catch (Throwable e) {
+            // Log but don't crash
+            try {
+                java.io.FileWriter fw = new java.io.FileWriter("/sdcard/Download/einkpoc_settings.txt");
+                fw.write("Settings.Global.putInt failed: " + e.getClass().getSimpleName() + ": " + e.getMessage() + "\n");
+                e.printStackTrace(new java.io.PrintWriter(fw));
+                fw.close();
+            } catch (Throwable ignored) {}
+        }
+
         bridge = new ENoteBridge();
+        boolean ok = bridge.init(this);
 
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
@@ -60,7 +76,6 @@ public class MainActivity extends Activity {
         addButton(row1, "Info", v -> refreshInfo());
         addButton(row1, "Fast Ink ON", v -> enableFastInk());
         addButton(row1, "Fast Ink OFF", v -> disableFastInk());
-        addButton(row1, "Probe Native", v -> probeNative());
         addButton(row1, "Clear", v -> drawView.clear());
 
         // Row 2: display modes
@@ -71,7 +86,6 @@ public class MainActivity extends Activity {
         addButton(row2, "FAST(4)", v -> setMode(4));
         addButton(row2, "GL16(3)", v -> setMode(3));
         addButton(row2, "GC(17)", v -> setMode(17));
-        addButton(row2, "Pen Width", v -> showPenWidthDialog());
 
         // Status text
         statusText = new TextView(this);
@@ -91,7 +105,6 @@ public class MainActivity extends Activity {
 
         setContentView(root);
 
-        boolean ok = bridge.init();
         statusText.setText(ok ? "Ready. Tap 'Fast Ink ON' to enable accelerated drawing."
                 : "FAILED to connect to ENoteSetting!");
     }
@@ -132,6 +145,13 @@ public class MainActivity extends Activity {
     }
 
     private void enableFastInk() {
+        // Pre-set MobileSheets write type so FocusMonitor activates WriteHelp
+        try {
+            android.provider.Settings.Global.putInt(getContentResolver(), "mobilesheets_write_type", 1);
+        } catch (Throwable e) {
+            // May fail without WRITE_SETTINGS permission, that's OK
+        }
+
         DisplayMetrics dm = getResources().getDisplayMetrics();
         int w = dm.widthPixels;
         int h = dm.heightPixels;
@@ -148,15 +168,45 @@ public class MainActivity extends Activity {
         sb.append("setAutoDrawToolType(2/pen): ").append(bridge.setAutoDrawToolType(2)).append("\n");
         sb.append("setAutoDrawPenWidthRange(").append(penMin).append(",").append(penMax).append("): ")
                 .append(bridge.setAutoDrawPenWidthRange(penMin, penMax)).append("\n");
-        sb.append("addAutoDrawRect(0,0,").append(w).append(",").append(h).append("): ")
+        // Get the DrawView's actual screen position
+        int[] loc = new int[2];
+        drawView.getLocationOnScreen(loc);
+        int dvLeft = loc[0];
+        int dvTop = loc[1];
+        int dvRight = dvLeft + drawView.getWidth();
+        int dvBottom = dvTop + drawView.getHeight();
+
+        sb.append("Screen: ").append(w).append("x").append(h).append("\n");
+        sb.append("DrawView on screen: (").append(dvLeft).append(",").append(dvTop)
+                .append(")-(").append(dvRight).append(",").append(dvBottom).append(")\n");
+
+        // Try multiple coordinate spaces to find what works
+        // Android coords (portrait)
+        sb.append("addAutoDrawRect(android 0,0,").append(w).append(",").append(h).append("): ")
                 .append(bridge.addAutoDrawRect(new Rect(0, 0, w, h))).append("\n");
+        // Physical coords (landscape, pre-rotation: 1920x1440)
+        sb.append("addAutoDrawRect(physical 0,0,1920,1440): ")
+                .append(bridge.addAutoDrawRect(new Rect(0, 0, 1920, 1440))).append("\n");
+        // Oversized rect to cover everything regardless of coord space
+        sb.append("addAutoDrawRect(oversized 0,0,2000,2000): ")
+                .append(bridge.addAutoDrawRect(new Rect(0, 0, 2000, 2000))).append("\n");
+
+        // T1000 direct commands — try setting handwriting range on the chip itself
+        // T1000_CMD_SET_HANDWRITING_ENABLE = 17 (enable=1)
+        sb.append("T1000 SET_HANDWRITING_ENABLE(1): ")
+                .append(bridge.callT1000Cmd(17, new int[]{1})).append("\n");
+        // T1000_CMD_SEND_HANDWRITING_RANGE = 14 (left, top, right, bottom)
+        // Try Android coords
+        sb.append("T1000 SEND_HANDWRITING_RANGE(0,0,").append(w).append(",").append(h).append("): ")
+                .append(bridge.callT1000Cmd(14, new int[]{0, 0, w, h})).append("\n");
+        // Try physical coords
+        sb.append("T1000 SEND_HANDWRITING_RANGE(0,0,1920,1440): ")
+                .append(bridge.callT1000Cmd(14, new int[]{0, 0, 1920, 1440})).append("\n");
 
         autoDrawActive = true;
         drawView.setAutoDrawActive(true);
 
         sb.append("\nFast ink enabled! Draw with the stylus.\n");
-        sb.append("The system renders strokes instantly via the T1000.\n");
-        sb.append("Our app renders the final result after pen-up.\n");
         statusText.setText(sb.toString());
         dumpToFile("einkpoc_fastink.txt", sb.toString());
     }
@@ -281,12 +331,11 @@ public class MainActivity extends Activity {
                 case MotionEvent.ACTION_DOWN:
                     currentStroke = new StrokeData();
                     addPoint(event);
-                    if (!autoDrawActive) invalidate();
+                    invalidate();
                     break;
 
                 case MotionEvent.ACTION_MOVE:
                     if (currentStroke != null) {
-                        // Process historical points for smoother strokes
                         for (int i = 0; i < event.getHistorySize(); i++) {
                             currentStroke.addPoint(
                                     event.getHistoricalX(i),
@@ -294,7 +343,7 @@ public class MainActivity extends Activity {
                                     event.getHistoricalPressure(i));
                         }
                         addPoint(event);
-                        if (!autoDrawActive) invalidate();
+                        invalidate();
                     }
                     break;
 
@@ -303,13 +352,7 @@ public class MainActivity extends Activity {
                         addPoint(event);
                         completedStrokes.add(currentStroke);
                         currentStroke = null;
-
-                        if (autoDrawActive) {
-                            // Delay redraw to let the overlay clear first
-                            handler.postDelayed(this::invalidate, REDRAW_DELAY_MS);
-                        } else {
-                            invalidate();
-                        }
+                        invalidate();
                     }
                     break;
             }

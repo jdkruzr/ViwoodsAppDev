@@ -17,3 +17,7 @@ viwoods_re/
 
 # Crash/debug output from device
 einkpoc_*.txt
+
+# Screenshots and pulled APKs
+*.png
+einkpoc.apk
