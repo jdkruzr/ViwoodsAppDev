@@ -57,9 +57,44 @@ The fast pen rendering system has three layers:
 └─────────────────────────────────────────────────────┘
 ```
 
-## Two Paths to Fast Ink
+## How Fast Ink Actually Works (SOLVED)
 
-### Path 1: AutoDraw via Binder (WORKING)
+The fast ink system requires ONE prerequisite and TWO lines of code:
+
+**Prerequisite:** `persist.sys.focusmonitor.config=1` must be set. This is a
+factory-default setting that enables the `FocusMonitorService` to register with
+`AccessibilityManagerService` at boot. Without it, `WritingSurface::init` fails
+with `lock error:-22`. On stock devices this is already set. After a factory reset
+or bootloader unlock, it must be re-set (requires root or the Viwoods debug tool's
+`enable accessibility` command).
+
+**App code:**
+```java
+ENoteSetting.getInstance().setApplicationContext(context.getApplicationContext());
+ENoteSetting.getInstance().initWriting();
+// That's it. Full-screen fast ink is now active.
+```
+
+`initWriting()` loads `libpaintworker.so` in the app process, connects to the
+`WritingProducer` service (an `IGraphicBufferProducer`), and opens `/dev/input/event6`
+(the pen digitizer) to intercept stylus input directly. The native layer renders
+pen strokes via `WritingSurface` → SurfaceFlinger, bypassing the Android View system
+entirely.
+
+The app's `targetSdkVersion` must be 30 to run as `untrusted_app_30` SELinux context
+(same as Viwoods' own apps like WiNote, Wschedule, Wmemo).
+
+**No root needed on stock devices.** No binder service calls needed. No AutoDraw
+rect setup needed. The entire AutoDraw/T1000 binder path (`setT1000AutoDrawEnable`,
+`addAutoDrawRect`, `setAllRegionUnAutoDraw`, etc.) is a separate system that manages
+per-app overlay regions in system_server — it was never the source of fast ink
+for first-party apps. Those apps use the JNI path exclusively.
+
+---
+
+## Legacy Investigation: Two Paths to Fast Ink
+
+### Path 1: AutoDraw via Binder (NOT the source of fast ink)
 
 This path uses the T1000AutoDrawPolicy in system_server. The system intercepts
 pen input at the native layer and renders strokes directly to the display before
