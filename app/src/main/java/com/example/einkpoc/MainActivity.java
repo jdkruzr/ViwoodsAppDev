@@ -159,6 +159,15 @@ public class MainActivity extends Activity {
         StringBuilder sb = new StringBuilder();
         sb.append("=== Enabling Fast Ink ===\n");
 
+        // Call initWriting to load libpaintworker.so in our process
+        // (requires SELinux rules added via magiskpolicy)
+        // Note: WritingSurface::init will fail but auto-draw rects might still work
+        sb.append("initWriting: ").append(bridge.initWriting()).append("\n");
+
+        // Now try to set auto-draw rects directly via ENoteWriting native methods
+        // These are in libpaintworker.so which is now loaded in our process
+        sb.append("setNativeAutoDrawRects: ").append(bridge.setNativeAutoDrawRects(w, h)).append("\n");
+
         // Set display to FAST mode
         sb.append("setPictureMode(FAST): ").append(bridge.setPictureMode(4)).append("\n");
 

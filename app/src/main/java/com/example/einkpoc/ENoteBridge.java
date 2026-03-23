@@ -109,6 +109,33 @@ public class ENoteBridge {
         return sb.toString();
     }
 
+    /**
+     * Try to call ENoteWriting.setAutoDrawRects() directly via JNI.
+     * This sets the native rects in libpaintworker.so which updateAutoDrawRegion() fails to do.
+     */
+    public String setNativeAutoDrawRects(int screenW, int screenH) {
+        try {
+            Class<?> writingClass = Class.forName("android.os.enote.ENoteWriting");
+            Method getInstance = writingClass.getMethod("getInstance");
+            Object writing = getInstance.invoke(null);
+
+            // Create a list with one full-screen rect
+            java.util.List<Rect> rects = new java.util.ArrayList<>();
+            rects.add(new Rect(0, 0, screenW, screenH));
+            // Also try physical coords
+            rects.add(new Rect(0, 0, 1920, 1440));
+
+            Method setRects = writingClass.getMethod("setAutoDrawRects", java.util.List.class);
+            setRects.invoke(writing, rects);
+            return "OK (native rects set)";
+        } catch (Throwable e) {
+            writeCrash("setNativeAutoDrawRects", e);
+            Throwable c = e;
+            while (c.getCause() != null) c = c.getCause();
+            return "FAIL:" + c.getClass().getSimpleName() + ":" + c.getMessage();
+        }
+    }
+
     // === Writing system ===
 
     public String initWriting() {
