@@ -64,9 +64,14 @@ The fast ink system requires ONE prerequisite and TWO lines of code:
 **Prerequisite:** `persist.sys.focusmonitor.config=1` must be set. This is a
 factory-default setting that enables the `FocusMonitorService` to register with
 `AccessibilityManagerService` at boot. Without it, `WritingSurface::init` fails
-with `lock error:-22`. On stock devices this is already set. After a factory reset
-or bootloader unlock, it must be re-set (requires root or the Viwoods debug tool's
-`enable accessibility` command).
+with `lock error:-22`.
+
+**CONFIRMED: This property is already set on all stock Viwoods devices.**
+Tested and verified on a stock, non-rooted AiPaper owned by an end user with
+no technical modifications. Fast ink works immediately with no setup required.
+The property is only missing after a bootloader unlock + factory reset (which
+wipes `/data/property/`). In that case, it can be restored with root or the
+Viwoods debug tool's `enable accessibility` command.
 
 **App code:**
 ```java

@@ -66,15 +66,24 @@ ViwoodsAppDev/
 
 3. **`NativeProbe.java`** — Diagnostic tool that probes `libpaintworker.so` method-by-method. Each step is independently error-handled. **Conclusion: direct JNI path is NOT viable from app process** (requires system privileges).
 
-### Fast Ink Path (Working Approach)
+### Fast Ink Path (Working — SOLVED)
 
-The app uses **AutoDraw via Binder IPC** — the T1000 timing controller renders strokes directly to the e-ink display before the app receives touch events:
+The app uses the **JNI/native path** — `libpaintworker.so` loads in the app process,
+connects to the `WritingProducer` service, and intercepts pen input directly from
+`/dev/input/event6`, rendering strokes via `WritingSurface` → SurfaceFlinger.
 
+**Just two lines of code:**
+```java
+ENoteSetting.getInstance().setApplicationContext(context.getApplicationContext());
+ENoteSetting.getInstance().initWriting();
 ```
-App → ENoteBridge (reflection/binder) → system_server → T1000 hardware overlay
-```
 
-Setup sequence: `setPictureMode(4)` → `setT1000AutoDrawEnable(true)` → `setAllRegionUnAutoDraw(false)` → `setAutoDrawToolType(2)` → `setAutoDrawPenWidthRange(min, max)` → `addAutoDrawRect(0, 0, w, h)`
+**No root required.** Works on all stock Viwoods AiPaper devices.
+`targetSdkVersion` must be 30 (runs as `untrusted_app_30` SELinux context).
+
+The AutoDraw binder path (setT1000AutoDrawEnable, addAutoDrawRect, etc.) was
+a separate system that turned out NOT to be the source of fast ink for first-party
+apps. Those calls are retained in the code for reference but are not required.
 
 ### Display Modes
 
@@ -99,9 +108,9 @@ Setup sequence: `setPictureMode(4)` → `setT1000AutoDrawEnable(true)` → `setA
 
 - **ADB shell is disabled** on this device — custom ADB daemon rejects shell commands
 - **logcat is not accessible** from Termux (SELinux restrictions)
-- **`libpaintworker.so` JNI path is dead** — requires `/dev/t1000_spi`, `SurfaceComposerClient`, libusb (all system-only)
+- **`libpaintworker.so` JNI path WORKS** — `initWriting()` succeeds on stock devices with `persist.sys.focusmonitor.config=1` (factory default). Requires `targetSdkVersion 30` for `untrusted_app_30` SELinux context.
 - **AutoDraw overlay is ephemeral** — strokes vanish after 800ms; app must re-render final content
-- **`setAllRegionUnAutoDraw(false)`** is the critical discovery — without it, AutoDraw is enabled but draws nowhere
+- **`setAllRegionUnAutoDraw(false)`** controls the AutoDraw binder path overlay (not needed for the JNI fast ink path)
 
 ## Reference Documentation
 
